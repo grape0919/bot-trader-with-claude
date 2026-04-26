@@ -74,6 +74,7 @@ python backtest_sweep.py     # 파라미터 자동 탐색 (볼륨/ADX/RSI풀백)
 - V자 캐처 (12개 지표 모두 실패)
 - 다중지표 합의
 - 1분/5분 사이클 (15분이 최적)
+- 과거 지표 패턴 추가 (ADX 추세, EMA 지속, RSI 평활, ATR 확장 등 모두 실패. 볼륨 5/20만 유효)
 
 상세는 [README.md §6.2](README.md) 참조.
 

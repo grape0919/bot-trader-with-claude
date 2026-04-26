@@ -139,11 +139,15 @@ awk '/^2026-04-24/' trading.log | grep "볼륨 필터" | \
 | [dashboard.py](dashboard.py) | HTML 대시보드 렌더링 |
 | [data_cache.py](data_cache.py) | OHLCV 파켓 캐시 (50배 빠른 백테스트) |
 
-### 백테스트 도구
-| 파일 | 용도 |
-|---|---|
-| [backtest_verify.py](backtest_verify.py) | 현재 설정 90일 검증 (시그널별/심볼별/월별 분석) |
-| [backtest_sweep.py](backtest_sweep.py) | 파라미터 스윕 (볼륨 임계 × ADX × RSI풀백 자동 탐색) |
+### 백테스트 / 검증 도구
+| 파일 | 용도 | 언제 쓰나 |
+|---|---|---|
+| [backtest_verify.py](backtest_verify.py) | 현재 설정 90일 검증 (시그널별/심볼별/월별 분석) | 운영 전 한 번, 큰 변경 후 재확인 |
+| [backtest_sweep.py](backtest_sweep.py) | 파라미터 스윕 (볼륨 × ADX × RSI풀백 48조합 자동 탐색) | 월 1회 재최적화, 시장 regime 변경 의심 시 |
+| [backtest_history_filters.py](backtest_history_filters.py) | 과거 지표 패턴 필터 1차 비교 (ADX/EMA/RSI/ATR 9종) | 새로운 과거 패턴 아이디어 1차 검증 |
+| [backtest_h7_validate.py](backtest_h7_validate.py) | 단일 필터 엄격 검증 (기간/임계/lookback/워크포워드/걸러진거래 분석) | 백테스트에서 효과 보인 필터를 적용 전 신뢰성 검증. **curve-fitting 잡기 위한 최종 관문** |
+
+> 💡 **검증 워크플로**: 새 아이디어 → `history_filters`로 1차 스크리닝 → 통과한 것만 `h7_validate` 패턴으로 엄격 검증(이름은 H7 검증용으로 만들었지만 일반화 가능 — 코드 복사해서 다른 필터로 변경) → 모든 테스트 통과해야 적용. H7도 1차에서는 +$342 보였으나 엄격 검증에서 워크포워드 실패로 폐기됨.
 
 ### 런타임 상태/출력
 | 파일 | 설명 |
@@ -216,6 +220,12 @@ LOOP_INTERVAL        # 300초 (캔들 정렬로 실제는 15분)
 | 반익반본 (반 익절/본전) | 시뮬상 PF 하락 | 수익 캡 이후 추세 손실 |
 | 변동성 큰 종목만 거래 | MDD 폭증 | 본 전략은 추세장 풀백 노림, 변동성 ≠ 추세 |
 | 단기추세만 → 장기추세 동시고려 | 빈도 -50% | 시그널 자체는 이미 EMA50으로 장기 반영 중 |
+| ADX 상승 추세 필터 (3봉 비교) | -$1,882, MDD +20%p | 후행 신호, 좋은 진입점 잘라냄 |
+| ADX 3봉평균 > 25 필터 | -$1,692 (거래 30건) | 너무 제한적, 표본 부족 |
+| EMA 정렬 3/5봉 지속 | -$879 | 첫 진입 기회 상실 (지속성 = 후행) |
+| RSI 깊은 풀백 (3봉 중 2봉) | -$1,913 | 깨끗한 prev→curr 크로스가 핵심 타이밍 |
+| RSI 3봉평균 풀백크로스 | -$1,799 | 평활화 = 타이밍 손실 |
+| ATR 확장 필터 (atr > atr[-5] × 1.1) | 90일 +$332, **180일 -$132** | 워크포워드 실패: 전반 Δ-$6/후반 Δ+$332. 효과의 대부분이 DOGE 1건의 -$149 우연 회피. 걸러진 10건 중 6승 4패. Curve-fitting. |
 
 ---
 
@@ -244,6 +254,21 @@ LOOP_INTERVAL        # 300초 (캔들 정렬로 실제는 15분)
 python backtest_sweep.py     # 90일 데이터로 48조합 스윕 (~3분)
 python backtest_verify.py    # 현재 설정 상세 검증
 ```
+
+**새 전략/필터 검증 워크플로**
+```bash
+# 1단계: 1차 스크리닝 (여러 후보 동시 비교)
+python backtest_history_filters.py
+
+# 2단계: 통과한 후보를 엄격 검증 (curve-fitting 잡기)
+python backtest_h7_validate.py     # H7 검증용 — 다른 필터로 변경하려면 코드 수정
+```
+검증 게이트 — 모든 항목 통과해야 적용:
+- [ ] **기간 안정성**: 60/90/120/180일 모두 개선
+- [ ] **임계값 sweep**: 인접 임계값(±0.05)에서도 개선 유지 (좁은 sweet spot 의심)
+- [ ] **lookback 안정성**: 인접 lookback에서도 일관된 결과
+- [ ] **워크포워드**: 전반/후반 분할에서 모두 개선
+- [ ] **걸러진 거래 분석**: 합산 PnL이 명확히 음수, 승률 50% 미만
 
 **비상 조치**
 - IP 변경됨 → Bitget API 키 화이트리스트 갱신
