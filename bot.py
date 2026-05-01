@@ -440,6 +440,7 @@ class TradingBot:
 
     def run(self) -> None:
         self.running = True
+        db.init_db()  # SQLite 즉시 생성 (대시보드가 빈 쿼리 가능하도록)
         balance = get_usdt_balance(self.exchange)
         # 첫 실행 시 시작 잔고 기록 (순수익 계산 기준)
         if self.starting_balance <= 0:

@@ -4,7 +4,7 @@ SQLite + JSON 상태 파일에서 데이터 로드
 """
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -45,8 +45,13 @@ def load_indicators():
 def query_df(sql: str, params=()):
     if not DB_PATH.exists():
         return pd.DataFrame()
-    with sqlite3.connect(DB_PATH) as c:
-        return pd.read_sql_query(sql, c, params=params)
+    try:
+        # 읽기 전용 모드 — ro 마운트 + 봇이 동시에 쓰는 중에도 안전
+        uri = f'file:{DB_PATH}?mode=ro'
+        with sqlite3.connect(uri, uri=True, timeout=5) as c:
+            return pd.read_sql_query(sql, c, params=params)
+    except Exception:
+        return pd.DataFrame()
 
 
 # ─── 헤더 ─────────────────────────────────────────────────────────────
