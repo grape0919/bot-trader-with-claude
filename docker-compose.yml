@@ -1,0 +1,59 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TRADING_DB=/app/state/trading.db
+    volumes:
+      - ./state:/app/state                # live_state.json + trading.db
+      - ./logs:/app/logs                  # trading.log (옵션)
+      - ./data_cache:/app/data_cache      # OHLCV 파켓 캐시
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2'
+    networks: [bot-net]
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: trading-dashboard
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8501:8501"             # Tailscale 통해서만 외부 접근
+    volumes:
+      - ./state:/app/state:ro
+    depends_on: [bot]
+    networks: [bot-net]
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: trading-grafana
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"             # Tailscale 전용
+    environment:
+      - GF_INSTALL_PLUGINS=frser-sqlite-datasource
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./state:/data:ro                  # SQLite 읽기 전용 마운트
+    depends_on: [bot]
+    networks: [bot-net]
+
+networks:
+  bot-net:
+
+volumes:
+  grafana-data:

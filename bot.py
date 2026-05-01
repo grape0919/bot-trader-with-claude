@@ -19,6 +19,8 @@ import ccxt
 import pandas as pd
 
 import config
+import db
+import notify
 from exchange import create_exchange, get_usdt_balance, get_open_positions, setup_symbol
 from strategy import calculate_indicators, get_signal, should_exit, get_indicator_snapshot
 from risk import calc_contracts
@@ -117,6 +119,8 @@ class TradingBot:
             )
             self.total_reloads += 1
             self._save_state()
+            db.log_event('wipeout', f'balance={balance:.2f}')
+            notify.wipeout(balance)
             return True
         return False
 
@@ -149,7 +153,7 @@ class TradingBot:
 
     # ─── 주문 실행 ───────────────────────────────────────────────────────────
 
-    def _open_position(self, symbol, side, amount, price, atr, mode, snap) -> bool:
+    def _open_position(self, symbol, side, amount, price, atr, mode, snap, leverage: int = 0) -> bool:
         is_long    = side == 'long'
         order_side = 'buy' if is_long else 'sell'
         sl_mult    = 1.2 if mode == 'roc' else 1.5
@@ -172,6 +176,9 @@ class TradingBot:
             )
             self.position_modes[symbol] = mode
             self._save_state()
+            margin_used = (amount * price) / max(leverage, 1)
+            db.log_trade_open(symbol, side, mode, price, amount, margin_used, leverage)
+            notify.entry(symbol, side, price, leverage, mode, margin_used)
             logger.info(
                 f"[OPEN][{symbol}] {side.upper()} ({mode}) | "
                 f"가격:{price:.4f} | 수량:{amount} | "
@@ -202,6 +209,15 @@ class TradingBot:
             )
             self.position_modes.pop(symbol, None)
             self._save_state()
+            entry_price = float(position.get('entryPrice') or 0)
+            exit_price = float(snap.get('price') or 0)
+            if entry_price > 0 and exit_price > 0:
+                diff = (exit_price - entry_price) if side == 'long' else (entry_price - exit_price)
+                pnl_est = (diff / entry_price) * (contracts * entry_price)
+            else:
+                pnl_est = 0.0
+            db.log_trade_close(symbol, exit_price, pnl_est, reason)
+            notify.exit_(symbol, side, exit_price, pnl_est, reason)
             logger.info(
                 f"[CLOSE][{symbol}] {side.upper()} → {reason} | 수량:{contracts} | "
                 f"RSI:{snap['rsi']} ADX:{snap['adx']}"
@@ -219,6 +235,11 @@ class TradingBot:
 
         dd = (self.peak_balance - balance) / self.peak_balance * 100 if self.peak_balance > 0 else 0
         tc = min(self.seed, balance)
+        equity = balance + sum(
+            float(p.get('initialMargin') or (p.get('info') or {}).get('marginSize') or 0)
+            for p in positions.values()
+        )
+        db.log_balance(balance, equity, len(positions), dd, self.peak_balance)
         logger.info(
             f"── 사이클 | 잔고:${balance:.2f} | 기준:${tc:.2f} | "
             f"누적출금:${self.total_withdrawn:.2f} | 청산:{self.total_reloads}회 | "
@@ -289,6 +310,8 @@ class TradingBot:
                 })
 
                 if not signal:
+                    db.log_skip(symbol, reason, snap.get('rsi'), snap.get('adx'),
+                                snap.get('atr_pct'), snap.get('roc5'), snap.get('vol_ratio'))
                     logger.info(
                         f"[SKIP][{symbol}] {reason} | "
                         f"RSI:{snap['rsi']} ADX:{snap['adx']} ATR%:{snap['atr_pct']} "
@@ -331,7 +354,7 @@ class TradingBot:
                     continue
 
                 setup_symbol(self.exchange, symbol, leverage)
-                success = self._open_position(symbol, signal, amount, price, atr, mode, snap)
+                success = self._open_position(symbol, signal, amount, price, atr, mode, snap, leverage)
                 if success:
                     new_entries_this_cycle += 1
                     positions = get_open_positions(self.exchange)
@@ -429,6 +452,8 @@ class TradingBot:
             f"페어:{len(config.SYMBOLS)}개 | TF:{config.TIMEFRAME} | "
             f"전략:멀티시그널(추세+급락반등+횡보)"
         )
+        db.log_event('startup', f'balance={balance:.2f}')
+        notify.startup(balance, self.seed)
         # 최초 실행 시 즉시 한 사이클 돌리고, 이후부터 캔들 마감 정렬
         first_cycle = True
         while self.running:

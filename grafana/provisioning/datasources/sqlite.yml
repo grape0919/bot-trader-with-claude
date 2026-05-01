@@ -1,0 +1,10 @@
+apiVersion: 1
+
+datasources:
+  - name: TradingDB
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: true
+    jsonData:
+      path: /data/trading.db
+    editable: false

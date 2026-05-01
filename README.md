@@ -6,38 +6,51 @@ Python + ccxt 기반. 시드 $40으로 운영하는 멀티시그널 + 3배 출�
 
 ## 1. 빠른 시작
 
+### 1.1 로컬 개발 (페이퍼 트레이딩, 백테스트)
+
 ```bash
-# 가상환경 + 의존성
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 페이퍼 트레이딩 (API 키 불필요)
+# 페이퍼
 python main.py --paper
 
-# 실거래 (API 키 필요)
-cp .env.example .env       # → .env 에 BITGET_API_KEY/SECRET/PASSPHRASE 입력
-python main.py             # "yes" 입력 후 시작
+# 백테스트
+python backtest_verify.py
+python backtest_sweep.py
 ```
 
-### 백그라운드 실행 + 로그
+### 1.2 서버 배포 (실거래, 권장)
+
+**스택**: Docker Compose + Streamlit + Grafana + SQLite + Telegram 알림 + Tailscale
+
+Ubuntu 서버에서 한 번에:
 ```bash
-nohup bash -c 'echo "yes" | python main.py' > /dev/null 2>&1 &
-# 종료
-pkill -f "python main.py"
+git clone <repo> ~/bot && cd ~/bot
+./deploy.sh             # Docker, Tailscale 설치 + 컴포즈 빌드/실행
+vim .env                # API 키 + (선택) Telegram 토큰 입력
+docker compose up -d    # 시작
 ```
 
-> **주의**: stdout을 `trading.log`로 리다이렉트하면 FileHandler와 충돌해 로그가 중복 기록됨. 반드시 `/dev/null`로.
+자동으로 기동되는 컨테이너:
+- `trading-bot` — 봇 (Bitget API 호출, SQLite/Telegram 로깅)
+- `trading-dashboard` — Streamlit 대시보드 (`:8501`)
+- `trading-grafana` — Grafana + SQLite 데이터소스 (`:3000`)
+
+> 포트는 `127.0.0.1`에만 바인딩 — Tailscale로만 외부 접근. nginx/SSL 불필요.
 
 ---
 
 ## 2. 모니터링
 
-| 방법 | 명령 | 용도 |
+| 방법 | 접근 | 용도 |
 |---|---|---|
-| 로그 실시간 | `tail -f trading.log` | 사이클별 시그널/스킵 확인 |
-| 대시보드 | `open dashboard.html` | 시각적 잔고/포지션/지표 (자동 새로고침) |
-| 프로세스 | `pgrep -fl "main.py"` | 봇 생존 확인 |
-| 잔고 상태 | `cat live_state.json` | 누적 출금/청산/시작잔고 |
+| **Streamlit 대시보드** | `http://<서버>.tailnet.ts.net:8501` | 잔고/거래/지표 실시간 (30초 갱신) |
+| **Grafana** | `http://<서버>.tailnet.ts.net:3000` | 시계열 차트, PnL 분포, 드로다운 |
+| **Telegram 알림** | 모바일 푸시 | 진입/청산/wipeout 즉시 |
+| 봇 로그 | `docker compose logs -f bot` | 사이클별 시그널/스킵 |
+| 컨테이너 상태 | `docker compose ps` | 헬스체크 |
+| SQLite 직접 쿼리 | `sqlite3 state/trading.db` | 임시 분석 |
 
 ### 로그에서 확인할 정보
 
@@ -149,22 +162,35 @@ awk '/^2026-04-24/' trading.log | grep "볼륨 필터" | \
 
 > 💡 **검증 워크플로**: 새 아이디어 → `history_filters`로 1차 스크리닝 → 통과한 것만 `h7_validate` 패턴으로 엄격 검증(이름은 H7 검증용으로 만들었지만 일반화 가능 — 코드 복사해서 다른 필터로 변경) → 모든 테스트 통과해야 적용. H7도 1차에서는 +$342 보였으나 엄격 검증에서 워크포워드 실패로 폐기됨.
 
-### 런타임 상태/출력
-| 파일 | 설명 |
+### 인프라 (서버 배포)
+| 파일 | 역할 |
 |---|---|
-| `live_state.json` | 봇 내부 상태 (출금/청산/시작잔고) |
-| `paper_state.json` | 대시보드용 상태 (실거래 봇도 여기 씀) |
-| `indicators.json` | 사이클별 지표 스냅샷 |
-| `dashboard.html` | 대시보드 (자동 갱신) |
-| `trading.log` | 사이클 로그 |
+| [Dockerfile](Dockerfile) | 봇 컨테이너 이미지 (Python 3.12-slim 기반) |
+| [Dockerfile.dashboard](Dockerfile.dashboard) | Streamlit 대시보드 이미지 |
+| [docker-compose.yml](docker-compose.yml) | 봇 + 대시보드 + Grafana 오케스트레이션 |
+| [deploy.sh](deploy.sh) | Ubuntu 서버 부트스트랩 (Docker/Tailscale 설치 + 빌드) |
+| [db.py](db.py) | SQLite 시계열 로거 (trades / balance_history / skip_log / events) |
+| [notify.py](notify.py) | Telegram 푸시 (entry/exit/wipeout) |
+| [dashboard_app.py](dashboard_app.py) | Streamlit 대시보드 앱 |
+| [grafana/](grafana/) | 데이터소스 + 대시보드 자동 프로비저닝 JSON |
+
+### 런타임 상태/출력
+| 파일/디렉토리 | 설명 |
+|---|---|
+| `state/live_state.json` | 봇 내부 상태 (출금/청산/시작잔고) |
+| `state/paper_state.json` | 대시보드용 상태 |
+| `state/indicators.json` | 사이클별 지표 스냅샷 |
+| `state/trading.db` | **SQLite — 거래/잔고/스킵 시계열** (Grafana 데이터소스) |
+| `logs/trading.log` | 사이클 로그 |
 | `data_cache/` | OHLCV 파켓 캐시 |
 
 ### 환경
 | 파일 | 설명 |
 |---|---|
-| `.env` | API 키 (gitignore 처리) |
+| `.env` | API 키 + Telegram + Grafana (gitignore 처리) |
 | `.env.example` | 키 템플릿 |
-| `requirements.txt` | 의존성 |
+| `requirements.txt` | 봇 의존성 |
+| `requirements-dashboard.txt` | Streamlit 의존성 (별도 컨테이너) |
 
 ---
 
@@ -243,11 +269,21 @@ LOOP_INTERVAL        # 300초 (캔들 정렬로 실제는 15분)
 
 ## 8. 운영 체크리스트
 
-**일일 점검**
-- [ ] `pgrep -fl "main.py"` 봇 살아있나
-- [ ] `tail -f trading.log` 사이클 정상 (캔들마다 1회)
-- [ ] 대시보드 잔고가 거래소와 일치
-- [ ] 스킵 사유 분포에 이상치 없는지 (특정 페어만 매번 에러 등)
+**일일 점검 (Docker 기반)**
+- [ ] `docker compose ps` 모든 컨테이너 `Up` 상태
+- [ ] `docker compose logs --tail 50 bot` 사이클 정상
+- [ ] Streamlit 대시보드 잔고가 거래소와 일치
+- [ ] Telegram 알림 수신 확인 (마지막 사이클 시각)
+- [ ] Grafana 드로다운 차트 이상치 없는지
+
+**컨테이너 관리**
+```bash
+docker compose ps               # 상태
+docker compose logs -f bot      # 봇 로그
+docker compose restart bot      # 재시작
+docker compose down             # 전체 정지
+git pull && docker compose up -d --build   # 코드 업데이트 + 재기동
+```
 
 **파라미터 재최적화 (월 1회 권장)**
 ```bash
@@ -271,6 +307,53 @@ python backtest_h7_validate.py     # H7 검증용 — 다른 필터로 변경하
 - [ ] **걸러진 거래 분석**: 합산 PnL이 명확히 음수, 승률 50% 미만
 
 **비상 조치**
-- IP 변경됨 → Bitget API 키 화이트리스트 갱신
-- $4 이하 청산 → `live_state.json` 백업 후 자본 재충전 후 재시작
+- IP 변경됨 → Bitget API 키 화이트리스트 갱신 (`curl -s https://api.ipify.org`)
+- $4 이하 청산 → `state/live_state.json` 백업 후 자본 재충전 후 `docker compose restart bot`
 - 큰 손실 발생 → 백테스트로 시장 regime 변경 여부 확인 → 필요 시 sweep 재실행
+- Telegram 알림 끊김 → `.env` 토큰 확인, 봇 재시작
+
+---
+
+## 9. 인프라 아키텍처
+
+```
+[Bitget API]
+     ↑
+     │ ccxt (재시도)
+     │
+┌────┴─────────────────────────────────────────┐
+│  Docker Compose (Ubuntu 서버)                │
+│                                                │
+│  ┌──── trading-bot ────┐                      │
+│  │  main.py            │                      │
+│  │  └─ strategy        │                      │
+│  │  └─ db.log_*        │──┐                   │
+│  │  └─ notify.*        │  │                   │
+│  └─────────────────────┘  │                   │
+│                            │ state/           │
+│                            ↓ (volume mount)   │
+│  ┌────────── 공유 디렉토리 ───────────┐        │
+│  │  state/trading.db (SQLite WAL)    │        │
+│  │  state/live_state.json            │        │
+│  │  state/indicators.json            │        │
+│  └────────────────────────────────────┘        │
+│        ↑                ↑                      │
+│  (read-only)      (read-only)                  │
+│        │                │                      │
+│  ┌─ trading-grafana ─┐  ┌─ trading-dashboard ─┐│
+│  │ frser-sqlite-ds   │  │ Streamlit + plotly  ││
+│  │ :3000             │  │ :8501               ││
+│  └───────────────────┘  └─────────────────────┘│
+└────────────────────────────────────────────────┘
+              ↑                          ↑
+              │ Tailscale (외부 포트 X)   │
+              ↓                          ↓
+         관리자 노트북                Telegram 앱
+```
+
+**주요 설계 결정**
+- **SQLite 단일 파일**: 별도 DB 서버 불필요, 읽기 전용 마운트로 다중 컨테이너 공유
+- **WAL 모드**: 봇이 쓰는 동안 Grafana/Streamlit이 락 없이 읽기
+- **Telegram > 이메일/SMS**: 푸시 즉시성 + 무료 + Bot API 단순
+- **Tailscale > nginx+SSL**: 인증서 갱신·도메인 불필요, 메시 VPN으로 zero-trust
+- **포트 127.0.0.1 바인딩**: 외부 직접 노출 0개 (Tailscale 통해서만 접근)
