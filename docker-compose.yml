@@ -26,7 +26,9 @@ services:
     container_name: trading-dashboard
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8501:8501"             # Tailscale 통해서만 외부 접근
+      # BIND_IP 미설정 시 127.0.0.1 (서버 로컬만). Tailscale 사용 시 .env 에
+      # BIND_IP=<tailscale IP> 설정해 메시 안에서만 노출.
+      - "${BIND_IP:-127.0.0.1}:8501:8501"
     volumes:
       - ./state:/app/state:ro
     depends_on: [bot]
@@ -37,7 +39,7 @@ services:
     container_name: trading-grafana
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3000:3000"             # Tailscale 전용
+      - "${BIND_IP:-127.0.0.1}:3000:3000"
     environment:
       - GF_INSTALL_PLUGINS=frser-sqlite-datasource
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
