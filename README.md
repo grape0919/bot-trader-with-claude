@@ -22,18 +22,18 @@ python backtest_sweep.py
 
 ### 1.2 서버 배포 (실거래, 권장)
 
-**스택**: Docker Compose + Streamlit + Grafana + SQLite + Telegram 알림 + Tailscale
+**스택**: Docker Compose + Streamlit + Grafana + SQLite + ntfy.sh 알림 + Tailscale
 
 Ubuntu 서버에서 한 번에:
 ```bash
 git clone <repo> ~/bot && cd ~/bot
 ./deploy.sh             # Docker, Tailscale 설치 + 컴포즈 빌드/실행
-vim .env                # API 키 + (선택) Telegram 토큰 입력
+vim .env                # API 키 + (선택) ntfy 토픽 입력
 docker compose up -d    # 시작
 ```
 
 자동으로 기동되는 컨테이너:
-- `trading-bot` — 봇 (Bitget API 호출, SQLite/Telegram 로깅)
+- `trading-bot` — 봇 (Bitget API 호출, SQLite + 푸시 알림)
 - `trading-dashboard` — Streamlit 대시보드 (`:8501`)
 - `trading-grafana` — Grafana + SQLite 데이터소스 (`:3000`)
 
@@ -47,7 +47,7 @@ docker compose up -d    # 시작
 |---|---|---|
 | **Streamlit 대시보드** | `http://<서버>.tailnet.ts.net:8501` | 잔고/거래/지표 실시간 (30초 갱신) |
 | **Grafana** | `http://<서버>.tailnet.ts.net:3000` | 시계열 차트, PnL 분포, 드로다운 |
-| **Telegram 알림** | 모바일 푸시 | 진입/청산/wipeout 즉시 |
+| **ntfy.sh 알림** | 모바일 푸시 (앱 설치) | 진입/청산/wipeout 즉시. Telegram도 옵션 |
 | 봇 로그 | `docker compose logs -f bot` | 사이클별 시그널/스킵 |
 | 컨테이너 상태 | `docker compose ps` | 헬스체크 |
 | SQLite 직접 쿼리 | `sqlite3 state/trading.db` | 임시 분석 |
@@ -170,7 +170,7 @@ awk '/^2026-04-24/' trading.log | grep "볼륨 필터" | \
 | [docker-compose.yml](docker-compose.yml) | 봇 + 대시보드 + Grafana 오케스트레이션 |
 | [deploy.sh](deploy.sh) | Ubuntu 서버 부트스트랩 (Docker/Tailscale 설치 + 빌드) |
 | [db.py](db.py) | SQLite 시계열 로거 (trades / balance_history / skip_log / events) |
-| [notify.py](notify.py) | Telegram 푸시 (entry/exit/wipeout) |
+| [notify.py](notify.py) | 멀티채널 푸시 — ntfy.sh + Telegram (env에 설정된 채널만 활성) |
 | [dashboard_app.py](dashboard_app.py) | Streamlit 대시보드 앱 |
 | [grafana/](grafana/) | 데이터소스 + 대시보드 자동 프로비저닝 JSON |
 
@@ -187,7 +187,7 @@ awk '/^2026-04-24/' trading.log | grep "볼륨 필터" | \
 ### 환경
 | 파일 | 설명 |
 |---|---|
-| `.env` | API 키 + Telegram + Grafana (gitignore 처리) |
+| `.env` | API 키 + ntfy/Telegram + Grafana (gitignore 처리) |
 | `.env.example` | 키 템플릿 |
 | `requirements.txt` | 봇 의존성 |
 | `requirements-dashboard.txt` | Streamlit 의존성 (별도 컨테이너) |
@@ -273,7 +273,7 @@ LOOP_INTERVAL        # 300초 (캔들 정렬로 실제는 15분)
 - [ ] `docker compose ps` 모든 컨테이너 `Up` 상태
 - [ ] `docker compose logs --tail 50 bot` 사이클 정상
 - [ ] Streamlit 대시보드 잔고가 거래소와 일치
-- [ ] Telegram 알림 수신 확인 (마지막 사이클 시각)
+- [ ] ntfy 푸시 수신 확인 (진입/청산 발생 시)
 - [ ] Grafana 드로다운 차트 이상치 없는지
 
 **컨테이너 관리**
@@ -310,7 +310,7 @@ python backtest_h7_validate.py     # H7 검증용 — 다른 필터로 변경하
 - IP 변경됨 → Bitget API 키 화이트리스트 갱신 (`curl -s https://api.ipify.org`)
 - $4 이하 청산 → `state/live_state.json` 백업 후 자본 재충전 후 `docker compose restart bot`
 - 큰 손실 발생 → 백테스트로 시장 regime 변경 여부 확인 → 필요 시 sweep 재실행
-- Telegram 알림 끊김 → `.env` 토큰 확인, 봇 재시작
+- 알림 끊김 → `.env`의 `NTFY_TOPIC` 또는 토큰 확인, 봇 재시작
 
 ---
 
@@ -348,12 +348,12 @@ python backtest_h7_validate.py     # H7 검증용 — 다른 필터로 변경하
               ↑                          ↑
               │ Tailscale (외부 포트 X)   │
               ↓                          ↓
-         관리자 노트북                Telegram 앱
+         관리자 노트북                ntfy.sh 앱 (또는 Telegram)
 ```
 
 **주요 설계 결정**
 - **SQLite 단일 파일**: 별도 DB 서버 불필요, 읽기 전용 마운트로 다중 컨테이너 공유
 - **WAL 모드**: 봇이 쓰는 동안 Grafana/Streamlit이 락 없이 읽기
-- **Telegram > 이메일/SMS**: 푸시 즉시성 + 무료 + Bot API 단순
+- **ntfy.sh > 이메일/SMS**: 푸시 즉시성 + 무료 + 계정 불필요 (토픽이 비밀번호). Telegram은 fallback 옵션
 - **Tailscale > nginx+SSL**: 인증서 갱신·도메인 불필요, 메시 VPN으로 zero-trust
 - **포트 127.0.0.1 바인딩**: 외부 직접 노출 0개 (Tailscale 통해서만 접근)

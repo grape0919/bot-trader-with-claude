@@ -66,7 +66,12 @@ BITGET_API_KEY=
 BITGET_SECRET=
 BITGET_PASSPHRASE=
 
-# ─── Telegram 알림 (선택) ───
+# ─── 알림 (선택, 여러 채널 동시 사용 가능) ───
+# ntfy.sh (권장): 폰 앱 설치 → 토픽 구독 → 같은 값 입력
+NTFY_TOPIC=
+NTFY_SERVER=https://ntfy.sh
+
+# Telegram (선택)
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 
